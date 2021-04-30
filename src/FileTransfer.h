@@ -8,3 +8,4 @@
 #include <fstream>
 #include <regex>
 #include <signal.h>
+#include <shlobj.h>
