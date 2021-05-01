@@ -1,3 +1,6 @@
+# Local dev files
+/tmp
+
 # Prerequisites
 *.d
 

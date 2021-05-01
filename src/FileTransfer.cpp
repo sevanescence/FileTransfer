@@ -10,6 +10,10 @@ inline char separator() {
     #endif
 }
 
+// I created this because declaring separator
+// as const would have made me have to rewrite
+// other code that I didn't feel like
+// rewriting.
 inline char const *separatorConst() {
     #ifdef _WIN32
         return "\\";
@@ -81,18 +85,18 @@ class SCPArgumentsBuilder {
         std::string ssh_option;
         uint16_t port;
         std::string program;
-        std::string source;
         SCPArgumentsBuilder() {
             port = 22; // default SSH port
             limit = 1000; // 1000 KB/s
         }
         char const * build(RemoteFilePipelineMeta meta, int pathSize) {
-            int const ARGS_BUFSIZE = 1024 - pathSize;
+            int const ARGS_BUFSIZE = CMD_BUFSIZE - pathSize;
             char args[ARGS_BUFSIZE];
             // what is a reaaaally not bad way to do this...
 
             std::string cppstrtmp;
-            cppstrtmp.append(" ").append(source).append(" ");
+            //cppstrtmp.append(" ").append(source).append(" ");
+            // get source and target from meta
             appendWithPrefixIfNotEmpty(cppstrtmp, cipher, "-c");
             appendWithPrefixIfNotEmpty(cppstrtmp, ssh_config, "-F");
             appendWithPrefixIfNotEmpty(cppstrtmp, identity_file, "-i");
@@ -112,6 +116,74 @@ class SCPArgumentsBuilder {
 
 };
 
+std::ostream &operator<<(std::ostream &os, SCPArgumentsBuilder const &builder) {
+    os << "cipher=\"" << builder.cipher << "\"" << std::endl;
+    os << "ssh_config=\"" << builder.ssh_config << "\"" << std::endl;
+    os << "identity_file=\"" << builder.identity_file << "\"" << std::endl;
+    os << "limit=" << builder.limit << std::endl;
+    os << "ssh_option=\"" << builder.ssh_option << "\"" << std::endl;
+    os << "port=" << builder.port << std::endl;
+    os << "program=\"" << builder.program << "\"" << std::endl;
+    return os;
+}
+
+
+std::istream &operator>>(std::istream &is, SCPArgumentsBuilder &builder) {
+    std::map<std::string, std::string &> builderStringProps
+    { 
+        { "cipher", builder.cipher },
+        { "ssh_config", builder.ssh_config },
+        { "identity_file", builder.identity_file },
+        { "ssh_option", builder.ssh_option },
+        { "program", builder.program }
+    };
+    // check limit and port manually. they are different data types so cant
+    // be put in their own single map ¯\_(ツ)_/¯
+
+
+    // hardcoded cfg parse implementation because i am lazy
+
+    std::string c;
+    std::map<std::string, std::string &>::iterator it;
+
+    using namespace std::regex_constants;
+
+    std::smatch matches;
+    std::smatch stmp;
+
+    std::regex cfgRgx("[A-z]+?(?=(\\s+?)?=)");
+    std::regex cfgItemStrRgx("\"(.+?)\"");
+    std::regex cfgItemRgx("=(\\s+?)?(.+?)\\b");
+    std::regex limitOrPortRgx("(limit|port)");
+
+    while (std::getline(is, c)) {
+        if (std::regex_search(c, matches, limitOrPortRgx)) {
+            std::regex_search(c, stmp, cfgItemRgx);
+            int n = std::stoi(stmp[2]);
+            if (matches[0] == "limit") {
+                builder.limit = n;
+            } else {
+                if (n < 22 || n > 65535) {
+                    std::cout << "ERROR: Port must not be below 22 or above 65535. Defaulting to port 22." << std::endl;
+                }
+                builder.port = n;
+            }
+            continue;
+        }
+
+        if (std::regex_search(c, matches, cfgRgx)) {
+            std::regex_search(c, stmp, cfgItemStrRgx);
+            // find matches[0] in map
+            it = builderStringProps.find(matches[0]);
+            if (it != builderStringProps.end()) {
+                it->second = stmp[1];
+            }
+        }
+    }
+    return is;
+}
+
+
 // strcat specialized for C-style strings with a MAX_PATH length.
 // Do not use for anything else.
 void pathstrcat(char *target, char const *source);
@@ -120,7 +192,7 @@ size_t const cstrlen(char *str);
 class DataFolderManager {
     private:
         char *DATA_FOLDER;
-        char const SETTINGS_CONFIG_FILENAME[13] = "settings.cfg";
+        char const SETTINGS_CONFIG[13] = "settings.cfg";
         char const PIPELINE_CONFIGURATIONS[15] = "pipelines.json";
     public:
         DataFolderManager(char *__DATA_FOLDER) {
@@ -131,23 +203,24 @@ class DataFolderManager {
         }
         char *getSettingsConfigPath() {
             char *tmp = (char *) malloc(MAX_PATH + 1);
-            for (int i = 0; DATA_FOLDER[i] != '\0'; i++) {
-                tmp[i] = DATA_FOLDER[i];
-            }
-            pathstrcat(tmp, separatorConst());
-            pathstrcat(tmp, SETTINGS_CONFIG_FILENAME);
+            memcpy(tmp, DATA_FOLDER, MAX_PATH);
+            strcat(tmp, separatorConst());
+            strcat(tmp, SETTINGS_CONFIG);
+
             return tmp;
         }
         char *getPipelineConfigPath() {
-            char *tmp = (char *) malloc(cstrlen(DATA_FOLDER) + 15 + 1);
-            for (int i = 0; DATA_FOLDER[i] != '\0'; i++) {
-                tmp[i] = DATA_FOLDER[i];
-            }
-            std::cout << tmp << std::endl;
-            std::cout << PIPELINE_CONFIGURATIONS << std::endl;
-            pathstrcat(tmp, separatorConst());
-            pathstrcat(tmp, PIPELINE_CONFIGURATIONS);
+            char *tmp = (char *) malloc(MAX_PATH + 1);
+            memcpy(tmp, DATA_FOLDER, MAX_PATH);
+            strcat(tmp, separatorConst());
+            strcat(tmp, PIPELINE_CONFIGURATIONS);
+
             return tmp;
+        }
+        // Fetch the settings file with the specified parsing option.
+        FILE *getSettingsConfig(const char *__o) {
+            char const *path = getSettingsConfigPath();
+            return fopen(path, __o);
         }
 };
 
@@ -156,25 +229,100 @@ void GetRoamingFolder(char *APPDATA_PATH);
 void InitializeDataFolder(char *DATA_FOLDER);
 void TerminalExitCallbackHandler(int signum);
 void ProgramExit(int exitCode);
+bool SettingsSetupPrompt(SCPArgumentsBuilder &builder);
+bool FileExists(char *path);
 
 // todo vscode compiler args should fix intellisense
 
+// TODO:
+// 1. prompt settings setup
+// 2. ask user if they want to save settings
+// 3. display main menu:
+//
+// []=>=>=>[] FILE TRANSFER []=>=>=>[]
+// [] 1. Settings
+// [] 2. Pipelines
+// [] 3. Run pipeline
+// []
+// [] CTRL+C to quit
+// [] 
+// [] > 
+
+// if 1 is pressed, display settings menu:
+//
+// []=>=>=>[] SETTINGS []=>=>=>[]
+// [] cipher=""
+// [] ssh_config=""
+// [] identity_file=""
+// [] limit=1000
+// [] ssh_option=""
+// [] port=22
+// [] program=""
+// [] source=""
+// []
+// [] Type any setting to reassign.
+// [] Press BACKSPACE to go back
+// [] 
+// [] > 
+
+// if 2 is pressed, display pipelines menu:
+
+// []=>=>=>[] PIPELINES []=>=>=>[]
+// [] 1. essay
+// [] 2. math_answers
+// [] 
+// [] n. Create new pipeline
+// [] d <name>. Delete pipeline
+// [] Press BACKSPACE to go back
+// []
+// [] > 
+
+// []=>=>=>[] ESSAY []=>=>=>[]
+// [] remote: /home/mmiyamoto/assignments/essay.txt
+// [] local: C:/Users/damia/documents/essay.txt
+// []
+// [] Type any setting to reassign
+// [] Press BACKSPACE to go back
+// []
+// [] > 
+
+
 int main() {
+    signal(SIGINT, TerminalExitCallbackHandler);
     HWND WINDOW = GetConsoleWindow();
     TCHAR SYSTEM_PATH[MAX_PATH];
     GetWindowsDirectory(SYSTEM_PATH, MAX_PATH);
-
-    char DATA_FOLDER[MAX_PATH];
-    InitializeDataFolder(DATA_FOLDER);
-    DataFolderManager dataFolderManager(DATA_FOLDER);
-    std::cout << dataFolderManager.getPipelineConfigPath() << std::endl;
     
     std::string OPENSSH_DIR;
     GetOpenSSHDirectory(OPENSSH_DIR, SYSTEM_PATH, MAX_PATH);
     OpenSSHHandler sshHandler(OPENSSH_DIR);
     SCPArgumentsBuilder builder;
 
+    char DATA_FOLDER[MAX_PATH];
+    InitializeDataFolder(DATA_FOLDER);
+    DataFolderManager dataFolderManager(DATA_FOLDER);
 
+    if (! FileExists(dataFolderManager.getDataFolder())) {
+        _mkdir(dataFolderManager.getDataFolder());
+    }
+
+    if (FILE *settings_r = fopen(dataFolderManager.getSettingsConfigPath(), "r")) {
+        std::ifstream settings_ifstream(dataFolderManager.getSettingsConfigPath());
+        settings_ifstream >> builder;
+        settings_ifstream.close();
+        fclose(settings_r);
+    } else {
+        std::cout << dataFolderManager.getSettingsConfigPath() << " does not exist!" << std::endl;
+        bool save = SettingsSetupPrompt(builder);
+        if (save) {
+            std::ofstream settings_ofstream(dataFolderManager.getSettingsConfigPath());
+            settings_ofstream << builder;
+            settings_ofstream.close();
+            std::cout << "Settings saved to " << dataFolderManager.getSettingsConfigPath() << std::endl;
+        }
+
+        fclose(settings_r);
+    }
 
     // std::system("C:\\Windows\\sysnative\\OpenSSH\\ssh.exe -p 2222 mmiyamoto@petdandertutorials.com");
 
@@ -182,10 +330,65 @@ int main() {
     // std::cout << WindowsProcessDelegate::exec(sshHandler.SSH_DIR.c_str(), "-p 2222") << std::endl;
     
     
-    
-    signal(SIGINT, TerminalExitCallbackHandler);
 
     ProgramExit(0);
+}
+
+bool FileExists(char *path) {
+    DWORD ftyp = GetFileAttributesA(path);
+    return ftyp != INVALID_FILE_ATTRIBUTES;
+}
+
+std::string input(std::string query) {
+    std::cout << query;
+    std::string r;
+    std::getline(std::cin, r);
+    return r;
+}
+
+int getInt(std::string query) {
+    start:
+    std::cout << query;
+    std::string tmp;
+    std::getline(std::cin, tmp);
+    if (tmp.length() == 0) return 0;
+    try {
+        return std::stoi(tmp);
+    } catch (...) {
+        std::cout << "Error: Input must be a whole number." << std::endl;
+        goto start;
+    }
+}
+
+bool SettingsSetupPrompt(SCPArgumentsBuilder &builder) {
+    std::system("cls");
+    std::cout << "Welcome to FileTransfer! To get you set up, let's configure your settings." << std::endl;
+    std::cout << "Since FileTransfer uses OpenSSH, the settings will be the same as the SCP command arguments." << std::endl;
+    std::cout << "\nIf you want a field left blank, press ENTER without entering any data.\n" << std::endl;
+    builder.cipher = input("Enter cypher: ");
+    builder.ssh_config = input("Enter SSH config: ");
+    builder.identity_file = input("Enter identity file: ");
+    int limit = getInt("Enter download limit in KB/s (default is 1 KB/s): ");
+    if (limit > 0) {
+        builder.limit = limit;
+    }
+    builder.ssh_option = input("SSH option: ");
+    
+    getPort:
+    int port = getInt("Enter SSH server port (default 22): ");
+    if (port < 22 || port > 65535) {
+        std::cout << "Port must be between 22 and 65535." << std::endl;
+        goto getPort;
+    }
+    builder.port = port;
+
+    builder.program = input("Enter program for connecting (defaults to OpenSSH ssh): ");
+
+    std::cout << "Save configuration to settings.cfg? (Y/n): ";
+    std::string r;
+    std::getline(std::cin, r);
+    
+    return r.at(0) == 'Y';
 }
 
 void pathstrcat(char *target, char const *source) {
@@ -250,8 +453,10 @@ void InitializeDataFolder(char *DATA_FOLDER) {
     GetRoamingFolder(DATA_FOLDER);
     size_t const dataFolderSize = 14;
     char const DATA_FOLDER_TITLE[dataFolderSize] = "FileTransfer";
-    pathstrcat(DATA_FOLDER, separatorConst());
-    pathstrcat(DATA_FOLDER, DATA_FOLDER_TITLE);
+    // pathstrcat(DATA_FOLDER, separatorConst());
+    // pathstrcat(DATA_FOLDER, DATA_FOLDER_TITLE);
+    strcat(DATA_FOLDER, separatorConst());
+    strcat(DATA_FOLDER, DATA_FOLDER_TITLE);
 }
 
 void TerminalExitCallbackHandler(int signum) {

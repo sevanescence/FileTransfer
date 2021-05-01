@@ -9,3 +9,6 @@
 #include <regex>
 #include <signal.h>
 #include <shlobj.h>
+#include <conio.h>
+#include <direct.h>
+#include <map>
