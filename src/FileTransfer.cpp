@@ -295,6 +295,19 @@ namespace Options {
         int const PIPELINES = 2;
         int const RUN_PIPELINES = 3;
     }
+    namespace System {
+        int const BACKSPACE = 8;
+    }
+    namespace Settings {
+        int const CIPHER = 49;
+        int const SSH_CONFIG = 50;
+        int const IDENTITY_FILE = 51;
+        int const LIMIT = 52;
+        int const SSH_OPTION = 53;
+        int const PORT = 54;
+        int const PROGRAM = 55;
+        int const SOURCE = 56;
+    }
 }
 
 class MainProcess {
@@ -355,8 +368,7 @@ int main() {
             settings_ofstream << builder;
             settings_ofstream.close();
             std::cout << "Settings saved to " << dataFolderManager.getSettingsConfigPath() << std::endl;
-            std::cout << "\nPress any key to continue to main menu." << std::endl;
-            getch();
+            std::system("pause");
         }
 
         fclose(settings_r);
@@ -419,6 +431,49 @@ int MainMenu(MainProcess &process) {
 // [] 
 // [] > 
 
+void SettingsOptionReassign(MainProcess process, int setting) {
+    std::system("cls");
+    std::cin.clear();
+    std::cin.ignore(123, '\n');
+    SCPArgumentsBuilder &builder = process.getSCPArgumentsBuilder();
+    std::map<int, std::string &> builderStringProps
+    { 
+        { Options::Settings::CIPHER, builder.cipher },
+        { Options::Settings::SSH_CONFIG, builder.ssh_config },
+        { Options::Settings::IDENTITY_FILE, builder.identity_file },
+        { Options::Settings::SSH_OPTION, builder.ssh_option },
+        { Options::Settings::PROGRAM, builder.program },
+        { Options::Settings::SOURCE, builder.source }
+    }; // im very good at programming, yes.
+    char const propertyNames[8][24] = {"cipher", "ssh_config", "identity_file", "limit", "ssh_option", "port", "program", "source"};
+    std::map<int, std::string &>::iterator it = builderStringProps.find(setting);
+    if (it != builderStringProps.end()) {
+        std::cout << propertyNames[setting - Options::Settings::CIPHER] << "=\"" << it->second << "\"\n";
+    } else {
+        std::string option_name = setting == Options::Settings::LIMIT ? "limit" : "port";
+        int option_value = setting == Options::Settings::LIMIT ? builder.limit : builder.port;
+        std::cout << option_name << "=" << option_value << std::endl;
+    }
+    std::cout << "Type new configuration: ";
+    std::string c;
+    std::getline(std::cin, c);
+    if (it != builderStringProps.end()) {
+        it->second.assign(c);
+    } else {
+        if (setting == Options::Settings::LIMIT) {
+            builder.limit = std::stoi(c);
+        } else {
+            builder.port = std::stoi(c);
+        }
+    }
+    std::cout << "Saving settings configuration..." << std::endl;
+    std::ofstream settings(process.getDataFolderManager().getSettingsConfigPath());
+    settings << builder;
+    settings.close();
+    std::cout << "Configuration saved!" << std::endl;
+    std::system("pause");
+}
+
 int Settings(MainProcess &process) {
     std::system("cls");
     SCPArgumentsBuilder &builder = process.getSCPArgumentsBuilder();
@@ -430,9 +485,25 @@ int Settings(MainProcess &process) {
     std::cout << "[] 5. ssh_option=\"" << builder.ssh_option << "\"\n";
     std::cout << "[] 6. port=" << builder.port << '\n';
     std::cout << "[] 7. program=\"" << builder.program << "\"\n";
-    std::cout << "[] 8. source=\"" << builder.program << "\"\n";
+    std::cout << "[] 8. source=\"" << builder.source << "\"\n";
     std::cout << "[]\n[] Type any setting to reassign.\n[] Press BACKSPACE to go back.\n[]\n[] > ";
-    getch();
+    int option = getch();
+    switch (option) {
+        case Options::Settings::CIPHER:
+        case Options::Settings::SSH_CONFIG:
+        case Options::Settings::IDENTITY_FILE:
+        case Options::Settings::LIMIT:
+        case Options::Settings::SSH_OPTION:
+        case Options::Settings::PORT:
+        case Options::Settings::PROGRAM:
+        case Options::Settings::SOURCE:
+            SettingsOptionReassign(process, option);
+            break;
+        case Options::System::BACKSPACE:
+            return 0;
+        default:
+            return Settings(process);
+    }
 }
 
 int Pipelines(MainProcess &process) {
