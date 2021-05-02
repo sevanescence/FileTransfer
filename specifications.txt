@@ -1,0 +1,22 @@
+settings.cfg
+
+The program settings configuration has eight options:
+cipher -> a string
+ssh_config -> a string
+identity_file -> a string
+limit -> a positive integer
+ssh_option -> a string
+port -> a positive unsigned short (0-65535)
+program -> a string
+source -> a string (server url: i.e. user@sshserver.com)
+
+pipelines
+
+Every individual pipeline has a dedicated .cfg within
+the pipelines directory in %appdata%/FileTransfer/
+The name of the file is the ID of the pipeline, which
+has a limit of 28 characters, 4 being reserved for .cfg.
+
+<pipelineId>.cfg:
+remote -> a string, directory of file in remote server
+local -> a string, directory of file on machine

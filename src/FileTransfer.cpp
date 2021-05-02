@@ -41,6 +41,20 @@ class WindowsProcessDelegate {
             }
             return std::system(CMD);
         }
+        // https://stackoverflow.com/a/478960
+        // requires gnu++ stdlib
+        static std::string exec(char const *cmd) {
+            std::array<char, 128> buffer;
+            std::string res;
+            std::unique_ptr<FILE, decltype(&pclose)> pipe(popen(cmd, "r"), pclose);
+            if (! pipe) {
+                throw std::runtime_error("popen() failed!");
+            }
+            while (fgets(buffer.data(), buffer.size(), pipe.get()) != nullptr) {
+                res += buffer.data();
+            }
+            return res;
+        }
 };
 
 class OpenSSHHandler {
@@ -61,6 +75,37 @@ struct RemoteFilePipelineMeta {
     std::string remotePath;
     std::string localTarget;
 };
+
+std::ostream &operator<<(std::ostream &os, RemoteFilePipelineMeta &meta) {
+    os << "remote=\"" << meta.remotePath << "\"\n" << "local=\"" << meta.localTarget << "\"\n";
+    return os;
+}
+
+std::istream &operator>>(std::istream &is, RemoteFilePipelineMeta &meta) {
+    std::map<std::string, std::string &> props
+    {
+        { "remote", meta.remotePath },
+        { "local", meta.localTarget }
+    };
+
+    std::regex cfgRgx("[A-z]+?(?=(\\s+?)?=)");
+    std::regex cfgItemStrRgx("\"(.+?)\"");
+
+    std::string line;
+    std::string key;
+    std::string val;
+    std::smatch sm;
+    while (is >> line) {
+        std::regex_search(line, sm, cfgRgx);
+        key = sm[0];
+        std::regex_search(line, sm, cfgItemStrRgx);
+        val = sm[1];
+        std::map<std::string, std::string &>::iterator it = props.find(key);
+        if (it != props.end()) {
+            it->second = val;
+        }
+    }
+}
 
 class SCPArgumentsBuilder {
     private:
@@ -186,11 +231,27 @@ std::istream &operator>>(std::istream &is, SCPArgumentsBuilder &builder) {
     return is;
 }
 
+class FileListMeta {
+    private:
+        int length;
+        char **files;
+    public:
+        FileListMeta(int _length, char **_files) {
+            length = _length;
+            files = _files;
+        }
+        int size() {
+            return length;
+        }
+        char ** getFiles() {
+            return files;
+        }
+        friend std::ostream &operator<<(std::ostream &os, FileListMeta const &flm);
+};
 
-// strcat specialized for C-style strings with a MAX_PATH length.
-// Do not use for anything else.
-void pathstrcat(char *target, char const *source);
-size_t const cstrlen(char *str);
+std::ostream &operator<<(std::ostream &os, FileListMeta const &flm) {
+    os << "{ length: " << flm.length << ", list_ptr: " << flm.files << " }";
+}
 
 class DataFolderManager {
     private:
@@ -220,10 +281,35 @@ class DataFolderManager {
 
             return tmp;
         }
-        // Fetch the settings file with the specified parsing option.
-        FILE *getSettingsConfig(const char *__o) {
-            char const *path = getSettingsConfigPath();
-            return fopen(path, __o);
+        FileListMeta getPipelineFileList() {
+            char cmd[256] = "dir ";
+            strcat(cmd, getPipelineConfigFolder());
+            strcat(cmd, " /b | findstr \"\\.cfg$\"");
+            std::string __exec_stdout = WindowsProcessDelegate::exec(cmd);
+
+            // get newlines in string
+            int nls = 0;
+            int pivot = 0;
+            std::vector<std::string> fileVector;
+            for (int i = 0; i < __exec_stdout.length(); i++) {
+                if (__exec_stdout.at(i) == '\n') {
+                    nls++;
+                    std::string tmp;
+                    for (int j = pivot; j < i; j++) {
+                        tmp.push_back(__exec_stdout.at(j));
+                    }
+                    fileVector.push_back(tmp);
+                    pivot = i + 1;
+                }
+            }
+            // nls = number of newlines in stdout, length of file list.
+            // 28 = 24 pipeline name length limit + .cfg (4 characters)
+            char **files = (char **) malloc(sizeof(char *) * nls);
+            for (int i = 0; i < fileVector.size(); i++) {
+                files[i] = (char *) malloc(sizeof(char *) * 28 + 1);
+                memcpy(files[i], fileVector.at(i).c_str(), 28);
+            }
+            return FileListMeta(nls, files);
         }
 };
 
@@ -315,11 +401,16 @@ class MainProcess {
         OpenSSHHandler *sshHandler;
         SCPArgumentsBuilder *builder;
         DataFolderManager *dataFolderManager;
+        std::vector<RemoteFilePipelineMeta> *pipelines;
     public:
-        MainProcess(OpenSSHHandler &_handler, SCPArgumentsBuilder &_builder, DataFolderManager &_manager) {
+        MainProcess(OpenSSHHandler &_handler,
+                    SCPArgumentsBuilder &_builder,
+                    DataFolderManager &_manager,
+                    std::vector<RemoteFilePipelineMeta> &_pipelines) {
             this->sshHandler = &_handler;
             this->builder = &_builder;
             this->dataFolderManager = &_manager;
+            this->pipelines = &_pipelines;
         }
         OpenSSHHandler &getOpenSSHHandler() {
             return *sshHandler;
@@ -330,12 +421,30 @@ class MainProcess {
         DataFolderManager &getDataFolderManager() {
             return *dataFolderManager;
         }
+        std::vector<RemoteFilePipelineMeta> &getPipelines() {
+            return *pipelines;
+        }
 };
 
 int MainMenu(MainProcess &process);
 int Settings(MainProcess &process);
 int Pipelines(MainProcess &process);
 int RunPipelines(MainProcess &proces);
+
+// https://stackoverflow.com/a/478960
+// requires gnu++ stdlib
+std::string exec(char const *cmd) {
+    std::array<char, 128> buffer;
+    std::string res;
+    std::unique_ptr<FILE, decltype(&pclose)> pipe(popen(cmd, "r"), pclose);
+    if (! pipe) {
+        throw std::runtime_error("popen() failed!");
+    }
+    while (fgets(buffer.data(), buffer.size(), pipe.get()) != nullptr) {
+        res += buffer.data();
+    }
+    return res;
+}
 
 int main() {
     signal(SIGINT, TerminalExitCallbackHandler);
@@ -356,6 +465,10 @@ int main() {
         _mkdir(dataFolderManager.getDataFolder());
     }
 
+    if (! FileExists(dataFolderManager.getPipelineConfigFolder())) {
+        _mkdir(dataFolderManager.getPipelineConfigFolder());
+    }
+
     if (FILE *settings_r = fopen(dataFolderManager.getSettingsConfigPath(), "r")) {
         std::ifstream settings_ifstream(dataFolderManager.getSettingsConfigPath());
         settings_ifstream >> builder;
@@ -374,7 +487,28 @@ int main() {
         fclose(settings_r);
     }
 
-    MainProcess process(sshHandler, builder, dataFolderManager);
+    std::vector<RemoteFilePipelineMeta> pipelines;
+    // TODO: get all pipelines in folder.
+    // RemoteFilePipelineMeta cfg parser
+    FileListMeta fileList = dataFolderManager.getPipelineFileList();
+    std::string path = dataFolderManager.getPipelineConfigFolder();
+    for (int i = 0; i < fileList.size(); i++) {
+        path.push_back(separator());
+        path += fileList.getFiles()[i];
+        
+        std::ifstream is(path);
+        RemoteFilePipelineMeta meta;
+        is >> meta;
+        pipelines.push_back(meta);
+
+        is.close();
+
+        path.assign(dataFolderManager.getPipelineConfigFolder());
+    }
+    std::system("pause");
+    ProgramExit(0);
+
+    MainProcess process(sshHandler, builder, dataFolderManager, pipelines);
 
     int option;
     for (;;) {
@@ -431,7 +565,7 @@ int MainMenu(MainProcess &process) {
 // [] 
 // [] > 
 
-void SettingsOptionReassign(MainProcess process, int setting) {
+void SettingsOptionReassign(MainProcess &process, int setting) {
     std::system("cls");
     std::cin.clear();
     std::cin.ignore(123, '\n');
@@ -476,6 +610,8 @@ void SettingsOptionReassign(MainProcess process, int setting) {
 
 int Settings(MainProcess &process) {
     std::system("cls");
+    std::cin.clear();
+    std::cin.ignore(123, '\n');
     SCPArgumentsBuilder &builder = process.getSCPArgumentsBuilder();
     std::cout << "[]=>=>=>[] SETTINGS []=>=>=>[]" << '\n';
     std::cout << "[] 1. cipher=\"" << builder.cipher << "\"\n";
@@ -486,8 +622,11 @@ int Settings(MainProcess &process) {
     std::cout << "[] 6. port=" << builder.port << '\n';
     std::cout << "[] 7. program=\"" << builder.program << "\"\n";
     std::cout << "[] 8. source=\"" << builder.source << "\"\n";
-    std::cout << "[]\n[] Type any setting to reassign.\n[] Press BACKSPACE to go back.\n[]\n[] > ";
-    int option = getch();
+    std::cout << "[]\n[] Type any setting to reassign.\n[] Press ENTER to go back.\n[]\n[] > ";
+    char option = std::cin.get();
+    if (option == '\n') {
+        return 0;
+    }
     switch (option) {
         case Options::Settings::CIPHER:
         case Options::Settings::SSH_CONFIG:
@@ -498,7 +637,7 @@ int Settings(MainProcess &process) {
         case Options::Settings::PROGRAM:
         case Options::Settings::SOURCE:
             SettingsOptionReassign(process, option);
-            break;
+            return 0;
         case Options::System::BACKSPACE:
             return 0;
         default:
@@ -506,10 +645,21 @@ int Settings(MainProcess &process) {
     }
 }
 
+// []=>=>=>[] PIPELINES []=>=>=>[]
+// [] 1. essay
+// [] 2. math_answers
+// [] 
+// [] n. Create new pipeline
+// [] d <name>. Delete pipeline
+// [] Press BACKSPACE to go back
+// []
+// [] > 
+
 int Pipelines(MainProcess &process) {
     std::system("cls");
-    std::cout << "Pipelines." << std::endl;
-    getch();
+    std::cout << "[]=>=>=>[] PIPELINES []=>=>=>[]" << std::endl;
+    std::cout << "[] > ";
+    std::system("pause");
 }
 
 int RunPipelines(MainProcess &process) {
@@ -577,20 +727,6 @@ bool SettingsSetupPrompt(SCPArgumentsBuilder &builder) {
     return r.at(0) == 'Y';
 }
 
-void pathstrcat(char *target, char const *source) {
-    int start = 0;
-    for (; target[start] != '\0'; start++);
-    for (int i = 0; source[i] != '\0'; i++) {
-        target[start + i] = source[i];
-    }
-}
-
-size_t const cstrlen(char *str) {
-    size_t tmp = 0;
-    for (; str[tmp] != '\0'; tmp++);
-    return tmp;
-}
-
 void GetOpenSSHDirectory(std::string &path, TCHAR *SYSTEM_DIR, size_t size) {
     for (int i = 0; i < size; i++) {
         if (SYSTEM_DIR[i] == '\0') {
@@ -639,8 +775,6 @@ void InitializeDataFolder(char *DATA_FOLDER) {
     GetRoamingFolder(DATA_FOLDER);
     size_t const dataFolderSize = 14;
     char const DATA_FOLDER_TITLE[dataFolderSize] = "FileTransfer";
-    // pathstrcat(DATA_FOLDER, separatorConst());
-    // pathstrcat(DATA_FOLDER, DATA_FOLDER_TITLE);
     strcat(DATA_FOLDER, separatorConst());
     strcat(DATA_FOLDER, DATA_FOLDER_TITLE);
 }

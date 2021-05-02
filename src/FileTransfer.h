@@ -13,3 +13,10 @@
 #include <direct.h>
 #include <map>
 #include <conio.h>
+#include <vector>
+
+#include <cstdio>
+#include <memory>
+#include <stdexcept>
+#include <string>
+#include <array>
