@@ -85,6 +85,7 @@ class SCPArgumentsBuilder {
         std::string ssh_option;
         uint16_t port;
         std::string program;
+        std::string source;
         SCPArgumentsBuilder() {
             port = 22; // default SSH port
             limit = 1000; // 1000 KB/s
@@ -95,7 +96,7 @@ class SCPArgumentsBuilder {
             // what is a reaaaally not bad way to do this...
 
             std::string cppstrtmp;
-            //cppstrtmp.append(" ").append(source).append(" ");
+            cppstrtmp.append(" ").append(source).append(" ");
             // get source and target from meta
             appendWithPrefixIfNotEmpty(cppstrtmp, cipher, "-c");
             appendWithPrefixIfNotEmpty(cppstrtmp, ssh_config, "-F");
@@ -124,6 +125,7 @@ std::ostream &operator<<(std::ostream &os, SCPArgumentsBuilder const &builder) {
     os << "ssh_option=\"" << builder.ssh_option << "\"" << std::endl;
     os << "port=" << builder.port << std::endl;
     os << "program=\"" << builder.program << "\"" << std::endl;
+    os << "source=\"" << builder.source << "\"" << std::endl;
     return os;
 }
 
@@ -135,7 +137,8 @@ std::istream &operator>>(std::istream &is, SCPArgumentsBuilder &builder) {
         { "ssh_config", builder.ssh_config },
         { "identity_file", builder.identity_file },
         { "ssh_option", builder.ssh_option },
-        { "program", builder.program }
+        { "program", builder.program },
+        { "source", builder.source }
     };
     // check limit and port manually. they are different data types so cant
     // be put in their own single map ¯\_(ツ)_/¯
@@ -193,7 +196,7 @@ class DataFolderManager {
     private:
         char *DATA_FOLDER;
         char const SETTINGS_CONFIG[13] = "settings.cfg";
-        char const PIPELINE_CONFIGURATIONS[15] = "pipelines.json";
+        char const PIPELINE_CONFIG_FOLDER[10] = "pipelines";
     public:
         DataFolderManager(char *__DATA_FOLDER) {
             DATA_FOLDER = __DATA_FOLDER;
@@ -209,11 +212,11 @@ class DataFolderManager {
 
             return tmp;
         }
-        char *getPipelineConfigPath() {
+        char *getPipelineConfigFolder() {
             char *tmp = (char *) malloc(MAX_PATH + 1);
             memcpy(tmp, DATA_FOLDER, MAX_PATH);
             strcat(tmp, separatorConst());
-            strcat(tmp, PIPELINE_CONFIGURATIONS);
+            strcat(tmp, PIPELINE_CONFIG_FOLDER);
 
             return tmp;
         }
@@ -242,7 +245,7 @@ bool FileExists(char *path);
 // []=>=>=>[] FILE TRANSFER []=>=>=>[]
 // [] 1. Settings
 // [] 2. Pipelines
-// [] 3. Run pipeline
+// [] 3. Run pipelines
 // []
 // [] CTRL+C to quit
 // [] 
@@ -278,7 +281,7 @@ bool FileExists(char *path);
 // [] > 
 
 // []=>=>=>[] ESSAY []=>=>=>[]
-// [] remote: /home/mmiyamoto/assignments/essay.txt
+// [] remote: mmiyamoto@petdandertutorials.com:/home/mmiyamoto/assignments/essay.txt
 // [] local: C:/Users/damia/documents/essay.txt
 // []
 // [] Type any setting to reassign
@@ -286,6 +289,40 @@ bool FileExists(char *path);
 // []
 // [] > 
 
+namespace Options {
+    namespace MainMenu {
+        int const SETTINGS = 1;
+        int const PIPELINES = 2;
+        int const RUN_PIPELINES = 3;
+    }
+}
+
+class MainProcess {
+    private:
+        OpenSSHHandler *sshHandler;
+        SCPArgumentsBuilder *builder;
+        DataFolderManager *dataFolderManager;
+    public:
+        MainProcess(OpenSSHHandler &_handler, SCPArgumentsBuilder &_builder, DataFolderManager &_manager) {
+            this->sshHandler = &_handler;
+            this->builder = &_builder;
+            this->dataFolderManager = &_manager;
+        }
+        OpenSSHHandler &getOpenSSHHandler() {
+            return *sshHandler;
+        }
+        SCPArgumentsBuilder &getSCPArgumentsBuilder() {
+            return *builder;
+        }
+        DataFolderManager &getDataFolderManager() {
+            return *dataFolderManager;
+        }
+};
+
+int MainMenu(MainProcess &process);
+int Settings(MainProcess &process);
+int Pipelines(MainProcess &process);
+int RunPipelines(MainProcess &proces);
 
 int main() {
     signal(SIGINT, TerminalExitCallbackHandler);
@@ -311,28 +348,105 @@ int main() {
         settings_ifstream >> builder;
         settings_ifstream.close();
         fclose(settings_r);
-    } else {
-        std::cout << dataFolderManager.getSettingsConfigPath() << " does not exist!" << std::endl;
+    } else { // settings.cfg does not exist
         bool save = SettingsSetupPrompt(builder);
         if (save) {
             std::ofstream settings_ofstream(dataFolderManager.getSettingsConfigPath());
             settings_ofstream << builder;
             settings_ofstream.close();
             std::cout << "Settings saved to " << dataFolderManager.getSettingsConfigPath() << std::endl;
+            std::cout << "\nPress any key to continue to main menu." << std::endl;
+            getch();
         }
 
         fclose(settings_r);
     }
 
-    // std::system("C:\\Windows\\sysnative\\OpenSSH\\ssh.exe -p 2222 mmiyamoto@petdandertutorials.com");
+    MainProcess process(sshHandler, builder, dataFolderManager);
 
-    // std::cout << sshHandler.SSH_DIR.length() << std::endl;
-    // std::cout << WindowsProcessDelegate::exec(sshHandler.SSH_DIR.c_str(), "-p 2222") << std::endl;
-    
-    
-
-    ProgramExit(0);
+    int option;
+    for (;;) {
+        option = MainMenu(process);
+        switch (option) {
+            case Options::MainMenu::SETTINGS:
+                Settings(process);
+                break;
+            case Options::MainMenu::PIPELINES:
+                Pipelines(process);
+                break;
+            case Options::MainMenu::RUN_PIPELINES:
+                RunPipelines(process);
+                break;
+            case 6683108: // ^C, somehow
+            default:
+                ProgramExit(0);
+        }
+    }
 }
+
+// functional programming FTW
+
+// []=>=>=>[] FILE TRANSFER []=>=>=>[]
+// [] 1. Settings
+// [] 2. Pipelines
+// [] 3. Run pipelines
+// []
+// [] CTRL+C to quit
+// [] 
+// [] > 
+
+int MainMenu(MainProcess &process) {
+    std::system("cls");
+    std::cout << "[]=>=>=>[] FILE TRANSFER []=>=>=>[]" << std::endl;
+    std::cout << "[] 1. Settings\n[] 2. Pipelines\n[] 3. Run Pipelines\n[]\n[] CTRL+C or 0 to quit\n[]\n[] > ";
+
+    int ch;
+    std::cin >> ch;
+    return ch;
+}
+
+// []=>=>=>[] SETTINGS []=>=>=>[]
+// [] cipher=""
+// [] ssh_config=""
+// [] identity_file=""
+// [] limit=1000
+// [] ssh_option=""
+// [] port=22
+// [] program=""
+// []
+// [] Type any setting to reassign.
+// [] Press BACKSPACE to go back
+// [] 
+// [] > 
+
+int Settings(MainProcess &process) {
+    std::system("cls");
+    SCPArgumentsBuilder &builder = process.getSCPArgumentsBuilder();
+    std::cout << "[]=>=>=>[] SETTINGS []=>=>=>[]" << '\n';
+    std::cout << "[] 1. cipher=\"" << builder.cipher << "\"\n";
+    std::cout << "[] 2. ssh_config=\"" << builder.ssh_config << "\"\n";
+    std::cout << "[] 3. identity_file=\"" << builder.identity_file << "\"\n";
+    std::cout << "[] 4. limit=" << builder.limit << '\n';
+    std::cout << "[] 5. ssh_option=\"" << builder.ssh_option << "\"\n";
+    std::cout << "[] 6. port=" << builder.port << '\n';
+    std::cout << "[] 7. program=\"" << builder.program << "\"\n";
+    std::cout << "[] 8. source=\"" << builder.program << "\"\n";
+    std::cout << "[]\n[] Type any setting to reassign.\n[] Press BACKSPACE to go back.\n[]\n[] > ";
+    getch();
+}
+
+int Pipelines(MainProcess &process) {
+    std::system("cls");
+    std::cout << "Pipelines." << std::endl;
+    getch();
+}
+
+int RunPipelines(MainProcess &process) {
+    std::system("cls");
+    std::cout << "Run Pipelines." << std::endl;
+    getch();
+}
+
 
 bool FileExists(char *path) {
     DWORD ftyp = GetFileAttributesA(path);
@@ -383,6 +497,7 @@ bool SettingsSetupPrompt(SCPArgumentsBuilder &builder) {
     builder.port = port;
 
     builder.program = input("Enter program for connecting (defaults to OpenSSH ssh): ");
+    builder.source = input("Enter your server source (ex. mmiyamoto@mysshserver.com)): ");
 
     std::cout << "Save configuration to settings.cfg? (Y/n): ";
     std::string r;
