@@ -306,7 +306,7 @@ class DataFolderManager {
             // 28 = 24 pipeline name length limit + .cfg (4 characters)
             char **files = (char **) malloc(sizeof(char *) * nls);
             for (int i = 0; i < fileVector.size(); i++) {
-                files[i] = (char *) malloc(sizeof(char *) * 28 + 1);
+                files[i] = (char *) malloc(sizeof(char) * 28 + 1);
                 memcpy(files[i], fileVector.at(i).c_str(), 28);
             }
             return FileListMeta(nls, files);
