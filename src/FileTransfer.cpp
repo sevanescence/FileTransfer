@@ -74,6 +74,7 @@ class OpenSSHHandler {
 struct RemoteFilePipelineMeta {
     std::string remotePath;
     std::string localTarget;
+    std::string id;
 };
 
 std::ostream &operator<<(std::ostream &os, RemoteFilePipelineMeta &meta) {
@@ -385,14 +386,18 @@ namespace Options {
         int const BACKSPACE = 8;
     }
     namespace Settings {
-        int const CIPHER = 49;
-        int const SSH_CONFIG = 50;
-        int const IDENTITY_FILE = 51;
-        int const LIMIT = 52;
-        int const SSH_OPTION = 53;
-        int const PORT = 54;
-        int const PROGRAM = 55;
-        int const SOURCE = 56;
+        int const CIPHER = '1';
+        int const SSH_CONFIG = '2';
+        int const IDENTITY_FILE = '3';
+        int const LIMIT = '4';
+        int const SSH_OPTION = '5';
+        int const PORT = '6';
+        int const PROGRAM = '7';
+        int const SOURCE = '8';
+    }
+    namespace Pipelines {
+        int const NEW_PIPELINE = 'n';
+        int const DELETE_PIPELINE = 'd';
     }
 }
 
@@ -428,23 +433,25 @@ class MainProcess {
 
 int MainMenu(MainProcess &process);
 int Settings(MainProcess &process);
+int Settings(MainProcess &process, int __t); // callback to avoid output stream overlap
 int Pipelines(MainProcess &process);
+int Pipelines(MainProcess &process, int __t);
 int RunPipelines(MainProcess &proces);
 
 // https://stackoverflow.com/a/478960
-// requires gnu++ stdlib
-std::string exec(char const *cmd) {
-    std::array<char, 128> buffer;
-    std::string res;
-    std::unique_ptr<FILE, decltype(&pclose)> pipe(popen(cmd, "r"), pclose);
-    if (! pipe) {
-        throw std::runtime_error("popen() failed!");
-    }
-    while (fgets(buffer.data(), buffer.size(), pipe.get()) != nullptr) {
-        res += buffer.data();
-    }
-    return res;
-}
+// requires gnu++ stdlib (moved to WindowsProcessDelegate::exec(std::basic_char<string>))
+// std::string exec(char const *cmd) {
+//     std::array<char, 128> buffer;
+//     std::string res;
+//     std::unique_ptr<FILE, decltype(&pclose)> pipe(popen(cmd, "r"), pclose);
+//     if (! pipe) {
+//         throw std::runtime_error("popen() failed!");
+//     }
+//     while (fgets(buffer.data(), buffer.size(), pipe.get()) != nullptr) {
+//         res += buffer.data();
+//     }
+//     return res;
+// }
 
 int main() {
     signal(SIGINT, TerminalExitCallbackHandler);
@@ -499,14 +506,15 @@ int main() {
         std::ifstream is(path);
         RemoteFilePipelineMeta meta;
         is >> meta;
+        meta.id = std::string(std::string(fileList.getFiles()[i]), 0, strlen(fileList.getFiles()[i]) - 4);
         pipelines.push_back(meta);
 
         is.close();
 
-        path.assign(dataFolderManager.getPipelineConfigFolder());
+        path.assign(dataFolderManager.getPipelineConfigFolder()); // reset path string
     }
-    std::system("pause");
-    ProgramExit(0);
+    // std::system("pause");
+    // ProgramExit(0);
 
     MainProcess process(sshHandler, builder, dataFolderManager, pipelines);
 
@@ -515,10 +523,10 @@ int main() {
         option = MainMenu(process);
         switch (option) {
             case Options::MainMenu::SETTINGS:
-                Settings(process);
+                Settings(process, 1);
                 break;
             case Options::MainMenu::PIPELINES:
-                Pipelines(process);
+                Pipelines(process, 1);
                 break;
             case Options::MainMenu::RUN_PIPELINES:
                 RunPipelines(process);
@@ -546,8 +554,7 @@ int MainMenu(MainProcess &process) {
     std::cout << "[]=>=>=>[] FILE TRANSFER []=>=>=>[]" << std::endl;
     std::cout << "[] 1. Settings\n[] 2. Pipelines\n[] 3. Run Pipelines\n[]\n[] CTRL+C or 0 to quit\n[]\n[] > ";
 
-    int ch;
-    std::cin >> ch;
+    int ch = std::cin.get() - '0';
     return ch;
 }
 
@@ -608,10 +615,16 @@ void SettingsOptionReassign(MainProcess &process, int setting) {
     std::system("pause");
 }
 
+int Settings(MainProcess &process, int __t) {
+    if (__t) {
+        std::cin.clear();
+        std::cin.ignore(123, '\n');
+    }
+    return Settings(process);
+}
+
 int Settings(MainProcess &process) {
     std::system("cls");
-    std::cin.clear();
-    std::cin.ignore(123, '\n');
     SCPArgumentsBuilder &builder = process.getSCPArgumentsBuilder();
     std::cout << "[]=>=>=>[] SETTINGS []=>=>=>[]" << '\n';
     std::cout << "[] 1. cipher=\"" << builder.cipher << "\"\n";
@@ -637,7 +650,7 @@ int Settings(MainProcess &process) {
         case Options::Settings::PROGRAM:
         case Options::Settings::SOURCE:
             SettingsOptionReassign(process, option);
-            return 0;
+            return Settings(process);
         case Options::System::BACKSPACE:
             return 0;
         default:
@@ -651,15 +664,94 @@ int Settings(MainProcess &process) {
 // [] 
 // [] n. Create new pipeline
 // [] d <name>. Delete pipeline
-// [] Press BACKSPACE to go back
+// [] Press ENTER to go back
 // []
 // [] > 
+
+bool PipelineMetaVectorContainsID(std::vector<RemoteFilePipelineMeta> vec, std::string s) {
+    std::vector<RemoteFilePipelineMeta>::iterator it;
+    for (it = vec.begin(); it != vec.end(); ++it) {
+        if (! it->id.compare(s)) {
+            return true;
+        }
+    }
+    return false;
+}
+
+int CreateNewPipeline(MainProcess &process) {
+    std::system("cls");
+    std::cout << "Create new pipeline.\n\n";
+    
+    RemoteFilePipelineMeta meta;
+    ID_Assign:
+    std::cout << "Enter new pipeline ID: ";
+    std::string s;
+    std::getline(std::cin, s);
+    if (PipelineMetaVectorContainsID(process.getPipelines(), s)) {
+        std::cout << "Error: ID already exists." << std::endl;
+        goto ID_Assign;
+    }
+    if (s.size() > 24) {
+        std::cout << "Error: ID must be no more than 24 characters." << std::endl;
+        goto ID_Assign;
+    }
+    meta.id.assign(s);
+    std::cout << "Enter remote path: ";
+    std::getline(std::cin, s);
+    meta.remotePath.assign(s);
+
+    std::cout << "Enter target path: ";
+    std::getline(std::cin, s);
+    meta.localTarget.assign(s);
+
+    process.getPipelines().push_back(meta);
+
+    std::string path(process.getDataFolderManager().getPipelineConfigFolder());
+    path.push_back(separator());
+    path.append(meta.id).append(".cfg");
+    std::ofstream os(path);
+    os << meta;
+    os.close();
+
+    std::cout << meta.id << " added!" << std::endl;
+    std::system("pause");
+    return Pipelines(process);
+}
+
+int Pipelines(MainProcess &process, int __t) {
+    if (__t) {
+        std::cin.clear();
+        std::cin.ignore(123, '\n');
+    }
+    return Pipelines(process);
+}
 
 int Pipelines(MainProcess &process) {
     std::system("cls");
     std::cout << "[]=>=>=>[] PIPELINES []=>=>=>[]" << std::endl;
+    std::vector<RemoteFilePipelineMeta>::iterator it = process.getPipelines().begin();
+    int i = 1;
+    while (it != process.getPipelines().end()) {
+        std::cout << "[] " << i++ << ". [" << it->id << "]\n";
+        std::cout << "[] remote=\"" << it->remotePath << "\"\n";
+        std::cout << "[] local=\"" << it->localTarget << "\"\n[]" << std::endl;
+        it++;
+    }
+    std::cout << "[] n. Create new pipeline\n[] d. <name> Delete pipeline\n[] Press ENTER to go back\n[]\n";
     std::cout << "[] > ";
-    std::system("pause");
+    std::string option;
+    std::getline(std::cin, option);
+    if (option.size() == 0) return 0;
+    switch (option.at(0)) {
+        case Options::Pipelines::NEW_PIPELINE:
+            return CreateNewPipeline(process);
+            break;
+        case Options::Pipelines::DELETE_PIPELINE:
+            break;
+        default:
+            break;
+    }
+    std::cin.get();
 }
 
 int RunPipelines(MainProcess &process) {
