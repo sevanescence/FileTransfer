@@ -136,13 +136,19 @@ class SCPArgumentsBuilder {
             port = 22; // default SSH port
             limit = 1000; // 1000 KB/s
         }
-        char const * build(RemoteFilePipelineMeta meta, int pathSize) {
-            int const ARGS_BUFSIZE = CMD_BUFSIZE - pathSize;
-            char args[ARGS_BUFSIZE];
-            // what is a reaaaally not bad way to do this...
+        char const * build(std::vector<RemoteFilePipelineMeta> vec, char const *auxPath) {
+            char args[CMD_BUFSIZE];
+            // used std::string for this because it would take far more code without it.
 
             std::string cppstrtmp;
-            cppstrtmp.append(" ").append(source).append(" ");
+            cppstrtmp.append(" ").append(source).append(":\"");
+            std::vector<RemoteFilePipelineMeta>::iterator it;
+            for (it = vec.begin(); it != vec.end(); ++it) {
+                cppstrtmp.push_back(' ');
+                cppstrtmp.append(it->remotePath);
+            }
+            cppstrtmp.append("\" ").append(std::string(auxPath)).push_back(' ');
+
             // get source and target from meta
             appendWithPrefixIfNotEmpty(cppstrtmp, cipher, "-c");
             appendWithPrefixIfNotEmpty(cppstrtmp, ssh_config, "-F");
@@ -160,7 +166,6 @@ class SCPArgumentsBuilder {
 
             return tmp;
         }
-
 };
 
 std::ostream &operator<<(std::ostream &os, SCPArgumentsBuilder const &builder) {
@@ -259,6 +264,14 @@ class DataFolderManager {
         char *DATA_FOLDER;
         char const SETTINGS_CONFIG[13] = "settings.cfg";
         char const PIPELINE_CONFIG_FOLDER[10] = "pipelines";
+        char const AUXILIARY_FOLDER[4] = "tmp";
+        char *pmalloc(char const *__f) {
+            char *tmp = (char *) malloc(MAX_PATH + 1);
+            memcpy(tmp, DATA_FOLDER, MAX_PATH);
+            strcat(tmp, separatorConst());
+            strcat(tmp, __f);
+            return tmp;
+        }
     public:
         DataFolderManager(char *__DATA_FOLDER) {
             DATA_FOLDER = __DATA_FOLDER;
@@ -267,20 +280,13 @@ class DataFolderManager {
             return DATA_FOLDER;
         }
         char *getSettingsConfigPath() {
-            char *tmp = (char *) malloc(MAX_PATH + 1);
-            memcpy(tmp, DATA_FOLDER, MAX_PATH);
-            strcat(tmp, separatorConst());
-            strcat(tmp, SETTINGS_CONFIG);
-
-            return tmp;
+            return pmalloc(SETTINGS_CONFIG);
         }
         char *getPipelineConfigFolder() {
-            char *tmp = (char *) malloc(MAX_PATH + 1);
-            memcpy(tmp, DATA_FOLDER, MAX_PATH);
-            strcat(tmp, separatorConst());
-            strcat(tmp, PIPELINE_CONFIG_FOLDER);
-
-            return tmp;
+            return pmalloc(PIPELINE_CONFIG_FOLDER);
+        }
+        char *getAuxiliaryFolder() {
+            return pmalloc(AUXILIARY_FOLDER);
         }
         FileListMeta getPipelineFileList() {
             char cmd[256] = "dir ";
@@ -517,6 +523,18 @@ int main() {
     // ProgramExit(0);
 
     MainProcess process(sshHandler, builder, dataFolderManager, pipelines);
+    // std::string str("scp ");
+    // str.append(builder.source).append(":/home/mmiyamoto/assignments/essay.txt");
+    // std::cout << builder.build(pipelines, "C:\\Users\\damia\\") << std::endl;
+
+    char const *auxFolder = dataFolderManager.getAuxiliaryFolder();
+    std::string cmd = "scp";
+    cmd.append(std::string(builder.build(pipelines, auxFolder)));
+    std::cout << cmd << std::endl;
+
+    std::system("pause");
+    
+    return 0;
 
     int option;
     for (;;) {
@@ -718,6 +736,68 @@ int CreateNewPipeline(MainProcess &process) {
     return Pipelines(process);
 }
 
+void DeletePipeline(MainProcess &process, std::string id) {
+    std::vector<RemoteFilePipelineMeta>::iterator it;
+    for (it = process.getPipelines().begin(); it != process.getPipelines().end(); ++it) {
+        if (it->id.compare(id) == 0) {
+            process.getPipelines().erase(it);
+            break;
+        }
+    }
+    std::string cfg("del ");
+    cfg.append(process.getDataFolderManager().getPipelineConfigFolder());
+    cfg.push_back(separator());
+    cfg.append(id).append(".cfg");
+    WindowsProcessDelegate::exec(cfg.c_str());
+    std::cout << "[] " << id << " deleted." << std::endl;
+}
+
+RemoteFilePipelineMeta GetPipelineByID(std::vector<RemoteFilePipelineMeta> vec, std::string id) {
+    std::vector<RemoteFilePipelineMeta>::iterator it;
+    for (it = vec.begin(); it->id.compare(id); ++it);
+    return *it;
+}
+
+int EditPipeline(MainProcess &process, RemoteFilePipelineMeta meta) {
+    std::system("cls");
+
+    std::cout << "Editing " << meta.id << std::endl;
+    std::cout << "Remote: \"" << meta.remotePath << "\"\n";
+    std::cout << "Local: \"" << meta.localTarget << "\"\n";
+    std::cout << "Enter a setting to change (the first letter works too).\nPress ENTER to go back.\n\n> ";
+    
+    Setting_Change:
+    bool remote; // whether to change remote or local
+    std::string option;
+    std::getline(std::cin, option);
+    if (option.length() == 0) return 0;
+    switch (option.at(0)) {
+        case 'R':
+        case 'r':
+            remote = true;
+            break;
+        case 'L':
+        case 'l':
+            remote = false;
+            break;
+        default:
+            std::cout << "Pick either (R)emote or (L)ocal" << std::endl;
+            goto Setting_Change;
+    }
+
+    std::cout << "Set new path for " << (remote ? "remote" : "target") << ": ";
+    std::getline(std::cin, option);
+    remote ? meta.remotePath = option : meta.localTarget = option;
+
+    std::string path(process.getDataFolderManager().getPipelineConfigFolder());
+    path.push_back(separator());
+    path.append(meta.id).append(".cfg");
+
+    std::cout << "Setting saved!" << std::endl;
+    std::system("pause");
+    return 0;
+}
+
 int Pipelines(MainProcess &process, int __t) {
     if (__t) {
         std::cin.clear();
@@ -737,9 +817,15 @@ int Pipelines(MainProcess &process) {
         std::cout << "[] local=\"" << it->localTarget << "\"\n[]" << std::endl;
         it++;
     }
-    std::cout << "[] n. Create new pipeline\n[] d. <name> Delete pipeline\n[] Press ENTER to go back\n[]\n";
+    std::cout << "[] n. Create new pipeline\n[] d. <name> Delete pipeline (ex. \"d. essay\")\n[] Press ENTER to go back\n[]\n";
     std::cout << "[] > ";
+
+    RemoteFilePipelineMeta meta;
     std::string option;
+    std::string id;
+    int pos;
+    char __o;
+    
     std::getline(std::cin, option);
     if (option.size() == 0) return 0;
     switch (option.at(0)) {
@@ -747,11 +833,32 @@ int Pipelines(MainProcess &process) {
             return CreateNewPipeline(process);
             break;
         case Options::Pipelines::DELETE_PIPELINE:
+            id = std::string(option, 3);
+            if (! PipelineMetaVectorContainsID(process.getPipelines(), id)) {
+                std::cout << "Pipeline " << id << " does not exist." << std::endl;
+            } else {
+                std::cout << "[] Are you sure? (Y/n): ";
+                std::cin >> __o;
+                if (__o == 'Y') DeletePipeline(process, id);
+                std::cin.clear();
+                std::cin.ignore(123, '\n');
+            }
+            std::system("pause");
             break;
         default:
+            if (std::regex_match(option, std::regex("^[0-9]{1,4}$"))) {
+                try {
+                    pos = std::stoi(option);
+                    meta = process.getPipelines().at(pos - 1); // good code yes
+                    EditPipeline(process, meta);
+                } catch (...) {
+                    std::cout << "Pipeline out of range." << std::endl;
+                    std::system("pause");
+                }
+            }
             break;
     }
-    std::cin.get();
+    return Pipelines(process);
 }
 
 int RunPipelines(MainProcess &process) {

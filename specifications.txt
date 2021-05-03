@@ -1,12 +1,57 @@
+FileTransfer Specification, Version 1.0
+
+1. Introduction
+
+FileTransfer is a Windows terminal application that allows
+the user to create multiple file pipelines between a
+remote SSH server and their local machine using OpenSSH
+via the SCP command.
+
+2. Settings
+
+The settings configuration for the FileTransfer program
+is saved in %APPDATA%/FileTransfer/settings.cfg, and
+serves as a placeholder for the OpenSSH SCP command
+arguments, except "source".
+
+2.1 Settings Arguments
+
+a. cipher: string - Specify the cipher for encrypting the data transfer
+
+b. ssh_config: string - Designate a subsitute per-user SSH configuration file
+                        (i.e., define it as the "ssh_config" variable).
+
+c. identity_file: string - If applicable, include this option and set the "identity_file"
+                           variable as the complete path to, and the file name of the
+                           private SSH key file.
+
+d. limit: unsigned integer - The highest amount of data that can be transfered in kilobytes
+                             per second (default: 1 KB/s).
+
+e. ssh_option: string - Send the specified "ssh_option" to SSH in the ssh_config format.
+                        Available options include the following (Detailed information
+                        on each of these options can be found at 
+                        http://www.openbsd.org/cgi-bin/man.cgi?query=ssh_config).
+
+f. port: unsigned short: Connect to port on the remote host (default: 22) (range: 22-65535)
+
+g. program: string - Specify the program to use for connection (probably irrelevant).
+
+h: source: string - URL to SSH server (ex. mmiyamoto@mysshserver.com).
+
+3. Pipelines
+
+
+
 settings.cfg
 
 The program settings configuration has eight options:
 cipher -> a string
 ssh_config -> a string
 identity_file -> a string
-limit -> a positive integer
+limit -> a positive integer (default: 1000)
 ssh_option -> a string
-port -> a positive unsigned short (0-65535)
+port -> a positive unsigned short (22-65535) (default: 22)
 program -> a string
 source -> a string (server url: i.e. user@sshserver.com)
 
