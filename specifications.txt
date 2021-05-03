@@ -2,17 +2,13 @@ FileTransfer Specification, Version 1.0
 
 1. Introduction
 
-FileTransfer is a Windows terminal application that allows
-the user to create multiple file pipelines between a
-remote SSH server and their local machine using OpenSSH
-via the SCP command.
+FileTransfer is a Windows terminal application that allows the user to create multiple file pipelines between a
+remote SSH server and their local machine using OpenSSH via the SCP command.
 
 2. Settings
 
-The settings configuration for the FileTransfer program
-is saved in %APPDATA%/FileTransfer/settings.cfg, and
-serves as a placeholder for the OpenSSH SCP command
-arguments, except "source".
+The settings configuration for the FileTransfer program is saved in %APPDATA%/FileTransfer/settings.cfg, and
+serves as a placeholder for the OpenSSH SCP command arguments, except "source".
 
 2.1 Settings Arguments
 
@@ -22,7 +18,7 @@ b. ssh_config: string - Designate a subsitute per-user SSH configuration file
                         (i.e., define it as the "ssh_config" variable).
 
 c. identity_file: string - If applicable, include this option and set the "identity_file"
-                           variable as the complete path to, and the file name of the
+                           variable as the complete path to, and the file name of th
                            private SSH key file.
 
 d. limit: unsigned integer - The highest amount of data that can be transfered in kilobytes

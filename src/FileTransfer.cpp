@@ -2,6 +2,44 @@
 
 #define CMD_BUFSIZE 1024
 
+struct RemoteFilePipelineMeta;
+class WindowsProcessDelegate;
+class DataFolderManager;
+class FileListMeta;
+class OpenSSHHandler;
+class SCPArgumentsBuilder;
+class MainProcess;
+
+class MainProcess {
+    private:
+        OpenSSHHandler *sshHandler;
+        SCPArgumentsBuilder *builder;
+        DataFolderManager *dataFolderManager;
+        std::vector<RemoteFilePipelineMeta> *pipelines;
+    public:
+        MainProcess(OpenSSHHandler &_handler,
+                    SCPArgumentsBuilder &_builder,
+                    DataFolderManager &_manager,
+                    std::vector<RemoteFilePipelineMeta> &_pipelines) {
+            this->sshHandler = &_handler;
+            this->builder = &_builder;
+            this->dataFolderManager = &_manager;
+            this->pipelines = &_pipelines;
+        }
+        OpenSSHHandler &getOpenSSHHandler() {
+            return *sshHandler;
+        }
+        SCPArgumentsBuilder &getSCPArgumentsBuilder() {
+            return *builder;
+        }
+        DataFolderManager &getDataFolderManager() {
+            return *dataFolderManager;
+        }
+        std::vector<RemoteFilePipelineMeta> &getPipelines() {
+            return *pipelines;
+        }
+};
+
 inline char separator() {
     #ifdef _WIN32
         return '\\';
@@ -140,14 +178,7 @@ class SCPArgumentsBuilder {
             char args[CMD_BUFSIZE];
             // used std::string for this because it would take far more code without it.
 
-            std::string cppstrtmp;
-            cppstrtmp.append(" ").append(source).append(":\"");
-            std::vector<RemoteFilePipelineMeta>::iterator it;
-            for (it = vec.begin(); it != vec.end(); ++it) {
-                cppstrtmp.push_back(' ');
-                cppstrtmp.append(it->remotePath);
-            }
-            cppstrtmp.append("\" ").append(std::string(auxPath)).push_back(' ');
+            std::string cppstrtmp = " ";
 
             // get source and target from meta
             appendWithPrefixIfNotEmpty(cppstrtmp, cipher, "-c");
@@ -160,6 +191,14 @@ class SCPArgumentsBuilder {
             if (limit != 0) {
                 appendWithPrefixIfNotEmpty(cppstrtmp, std::to_string(limit), "-l");
             }
+
+            cppstrtmp.append(source).append(":\"");
+            std::vector<RemoteFilePipelineMeta>::iterator it;
+            for (it = vec.begin(); it != vec.end(); ++it) {
+                cppstrtmp.push_back(' ');
+                cppstrtmp.append(it->remotePath);
+            }
+            cppstrtmp.append("\" ").append(std::string(auxPath)).push_back(' ');
 
             char *tmp = (char *) malloc(sizeof(char) + (cppstrtmp.length() + 1));
             strcpy(tmp, cppstrtmp.c_str());
@@ -259,6 +298,18 @@ std::ostream &operator<<(std::ostream &os, FileListMeta const &flm) {
     os << "{ length: " << flm.length << ", list_ptr: " << flm.files << " }";
 }
 
+char const *GetISO8601TimeFileParsable() {
+    char *buf = (char *) malloc(21);
+    time_t rawtime;
+    struct tm *timeinfo;
+    time(&rawtime);
+    timeinfo = localtime(&rawtime);
+    strftime(buf, 21, "%Y-%m-%dT%H_%M_%SZ", timeinfo);
+    return buf;
+}
+
+RemoteFilePipelineMeta FindMetaByFileName(std::vector<RemoteFilePipelineMeta> vec, std::string name);
+
 class DataFolderManager {
     private:
         char *DATA_FOLDER;
@@ -287,6 +338,37 @@ class DataFolderManager {
         }
         char *getAuxiliaryFolder() {
             return pmalloc(AUXILIARY_FOLDER);
+        }
+        // TODO delegate algorithm for files into other function idk
+        FileListMeta getAuxiliaryFileList() {
+            char cmd[256] = "dir ";
+            strcat(cmd, getAuxiliaryFolder());
+            strcat(cmd, " /b");
+            std::string __exec_stdout = WindowsProcessDelegate::exec(cmd);
+
+            // get newlines in string
+            int nls = 0;
+            int pivot = 0;
+            std::vector<std::string> fileVector;
+            for (int i = 0; i < __exec_stdout.length(); i++) {
+                if (__exec_stdout.at(i) == '\n') {
+                    nls++;
+                    std::string tmp;
+                    for (int j = pivot; j < i; j++) {
+                        tmp.push_back(__exec_stdout.at(j));
+                    }
+                    fileVector.push_back(tmp);
+                    pivot = i + 1;
+                }
+            }
+            // nls = number of newlines in stdout, length of file list.
+            // 28 = 24 pipeline name length limit + .cfg (4 characters)
+            char **files = (char **) malloc(sizeof(char *) * nls);
+            for (int i = 0; i < fileVector.size(); i++) {
+                files[i] = (char *) malloc(sizeof(char) * 28 + 1);
+                memcpy(files[i], fileVector.at(i).c_str(), 28);
+            }
+            return FileListMeta(nls, files);
         }
         FileListMeta getPipelineFileList() {
             char cmd[256] = "dir ";
@@ -318,7 +400,103 @@ class DataFolderManager {
             }
             return FileListMeta(nls, files);
         }
+        void auxiliaryDump(MainProcess &process) {
+            HANDLE hConsole = GetStdHandle(STD_OUTPUT_HANDLE);
+            SCPArgumentsBuilder &builder = process.getSCPArgumentsBuilder();
+            std::vector<RemoteFilePipelineMeta> &pipelines = process.getPipelines();
+            char const *auxPath = getAuxiliaryFolder();
+            
+            std::string cmd(process.getOpenSSHHandler().SCP_DIR);
+            cmd.append(std::string(builder.build(pipelines, auxPath)));
+
+            _mkdir(getAuxiliaryFolder());
+            char const *cmd_cstr = cmd.c_str();
+            std::cout << "Fetching files..." << std::endl;
+            WindowsProcessDelegate::exec(cmd_cstr);
+            std::cout << "Files dumped to auxiliary folder. Transferring to target directories..." << std::endl;
+
+            char const *now = GetISO8601TimeFileParsable();
+            std::string log_path(getDataFolder());
+            log_path.push_back(separator());
+            log_path.append("logs").push_back(separator());
+            _mkdir(log_path.c_str());
+            log_path.append(std::string(now)).append(".log");
+
+            std::ofstream log(log_path, std::ofstream::out);
+            // TODO create struct to merge log and output streams
+
+            std::string auxPathTmp(getAuxiliaryFolder());            
+            FileListMeta meta = getAuxiliaryFileList();
+            RemoteFilePipelineMeta pipeline;
+            int failedWrites = 0;
+            for (int i = 0; i < meta.size(); i++) {
+                auxPathTmp.push_back(separator());
+                auxPathTmp.append(meta.getFiles()[i]);
+
+                pipeline = FindMetaByFileName(pipelines, meta.getFiles()[i]);
+                
+                std::string out;
+                std::ifstream is(auxPathTmp);
+                out.assign(std::string(std::istreambuf_iterator<char>(is), std::istreambuf_iterator<char>()));
+                is.close();
+
+                std::ofstream os(pipeline.localTarget);
+                if (os.fail()) {
+                    SetConsoleTextAttribute(hConsole, 12);
+                    std::cout << "Error: File cannot be written. Directory likely doesnt exist." << std::endl;
+                    log << "Error: File cannot be written. Directory likely doesnt exist." << std::endl;
+                    std::cout << "Filename: " << meta.getFiles()[i] << std::endl;
+                    log << "Filename: " << meta.getFiles()[i] << std::endl;
+                    std::cout << "Target path: " << pipeline.localTarget << std::endl;
+                    log << "Target path: " << pipeline.localTarget << std::endl;
+                    SetConsoleTextAttribute(hConsole, 15);
+                    failedWrites++;
+                } else {
+                    os.write(out.c_str(), out.length() + 1);
+                    SetConsoleTextAttribute(hConsole, 2);
+                    std::cout << meta.getFiles()[i] << " written to " << pipeline.localTarget << std::endl;
+                    log << meta.getFiles()[i] << " written to " << pipeline.localTarget << std::endl;
+                    SetConsoleTextAttribute(hConsole, 15);
+                }
+                os.close();
+
+                auxPathTmp.assign(std::string(getAuxiliaryFolder()));
+            }
+
+            log.close();
+
+            if (failedWrites) {
+                SetConsoleTextAttribute(hConsole, 14);
+                std::cout << "Some files failed to send (" << failedWrites 
+                    << "/" << meta.size() << " failed writes)." << std::endl;
+                SetConsoleTextAttribute(hConsole, 15);
+            } else {
+                SetConsoleTextAttribute(hConsole, 2);
+                std::cout << "All files sent to target directories!" << std::endl;
+                SetConsoleTextAttribute(hConsole, 15);
+            }
+            std::cout << "Pipeline log can be found in " << log_path << std::endl;
+
+            // TODO find out why windows cant find folder
+            // std::string s("rmdir -s -q ");
+            // s.append(getAuxiliaryFolder());
+            // s.push_back(separator());
+            // std::cout << s << std::endl;
+            // WCHAR wstr[s.length() + 1];
+            // MultiByteToWideChar(0, 0, s.c_str(), s.length(), wstr, s.length() + 1);
+            // LPCWSTR cwstr = wstr;
+            // RemoveDirectory(cwstr);
+        }
 };
+
+RemoteFilePipelineMeta FindMetaByFileName(std::vector<RemoteFilePipelineMeta> vec, std::string name) {
+    std::vector<RemoteFilePipelineMeta>::iterator it;
+    for (it = vec.begin(); it != vec.end(); ++it) {
+        if (std::regex_search(it->remotePath, std::regex(name))) {
+            return *it;
+        }
+    }
+}
 
 void GetOpenSSHDirectory(std::string &path, TCHAR *SYSTEM_DIR, size_t size);
 void GetRoamingFolder(char *APPDATA_PATH);
@@ -406,36 +584,6 @@ namespace Options {
         int const DELETE_PIPELINE = 'd';
     }
 }
-
-class MainProcess {
-    private:
-        OpenSSHHandler *sshHandler;
-        SCPArgumentsBuilder *builder;
-        DataFolderManager *dataFolderManager;
-        std::vector<RemoteFilePipelineMeta> *pipelines;
-    public:
-        MainProcess(OpenSSHHandler &_handler,
-                    SCPArgumentsBuilder &_builder,
-                    DataFolderManager &_manager,
-                    std::vector<RemoteFilePipelineMeta> &_pipelines) {
-            this->sshHandler = &_handler;
-            this->builder = &_builder;
-            this->dataFolderManager = &_manager;
-            this->pipelines = &_pipelines;
-        }
-        OpenSSHHandler &getOpenSSHHandler() {
-            return *sshHandler;
-        }
-        SCPArgumentsBuilder &getSCPArgumentsBuilder() {
-            return *builder;
-        }
-        DataFolderManager &getDataFolderManager() {
-            return *dataFolderManager;
-        }
-        std::vector<RemoteFilePipelineMeta> &getPipelines() {
-            return *pipelines;
-        }
-};
 
 int MainMenu(MainProcess &process);
 int Settings(MainProcess &process);
@@ -526,15 +674,6 @@ int main() {
     // std::string str("scp ");
     // str.append(builder.source).append(":/home/mmiyamoto/assignments/essay.txt");
     // std::cout << builder.build(pipelines, "C:\\Users\\damia\\") << std::endl;
-
-    char const *auxFolder = dataFolderManager.getAuxiliaryFolder();
-    std::string cmd = "scp";
-    cmd.append(std::string(builder.build(pipelines, auxFolder)));
-    std::cout << cmd << std::endl;
-
-    std::system("pause");
-    
-    return 0;
 
     int option;
     for (;;) {
@@ -863,8 +1002,10 @@ int Pipelines(MainProcess &process) {
 
 int RunPipelines(MainProcess &process) {
     std::system("cls");
-    std::cout << "Run Pipelines." << std::endl;
-    getch();
+    process.getDataFolderManager().auxiliaryDump(process);
+    std::system("pause");
+    std::cin.clear();
+    std::cin.ignore(123, '\n');
 }
 
 

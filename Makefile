@@ -3,4 +3,4 @@
 
 FileTransfer:
 	cls
-	g++ -DUNICODE -std=gnu++17 -o build/FileTransfer src/FileTransfer.cpp
+	g++ -DUNICODE -std=gnu++17 -o build/FileTransfer src/FileTransfer.cpp -static-libgcc -static-libstdc++

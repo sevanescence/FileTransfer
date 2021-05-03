@@ -20,3 +20,5 @@
 #include <stdexcept>
 #include <string>
 #include <array>
+#include <streambuf>
+#include <ctime>
